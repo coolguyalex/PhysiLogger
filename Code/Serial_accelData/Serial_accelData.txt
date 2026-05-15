@@ -1,0 +1,1 @@
+Interfaces an Adafruit RP2040 adalogger with an MPU-6050 and communicates the data over Serial
