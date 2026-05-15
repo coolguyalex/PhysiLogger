@@ -81,7 +81,7 @@ void drawIdleScreen() {
   // ── Yellow zone (y 0-15) — title ─────────────────────────
   display.setTextSize(1);
   display.setCursor(16, 4);
-  display.println("PHYSILOGGER");
+  display.println("PHYSI-LOGGER");
 
   // ── Blue zone (y 16-63) ───────────────────────────────────
   display.drawLine(0, 16, 127, 16, SSD1306_WHITE);
