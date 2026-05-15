@@ -5,48 +5,44 @@
 #define MPU_ADDR    0x68
 #define SD_CS_PIN   23
 #define BUTTON_PIN  10
-#define HOLD_MS     2000  // hold duration to start/stop logging
+#define HOLD_MS     2000
+#define LED_PIN     LED_BUILTIN
 
 SdFat sd;
 SdSpiConfig sdConfig(SD_CS_PIN, DEDICATED_SPI, SD_SCK_MHZ(16), &SPI1);
 SdFile logFile;
 
-bool logging    = false;  // are we currently logging?
-bool sdReady    = false;
-bool mpuReady   = false;
+bool logging  = false;
+bool sdReady  = false;
+bool mpuReady = false;
 
-// ── Button: returns true if button held for HOLD_MS ──────────
-bool buttonHeld() {
-  if (digitalRead(BUTTON_PIN) != LOW) return false;  // not even pressed
-  unsigned long pressStart = millis();
-  while (digitalRead(BUTTON_PIN) == LOW) {
-    if (millis() - pressStart >= HOLD_MS) return true;
-    delay(10);
-  }
-  return false;  // released before HOLD_MS
-}
+unsigned long lastBlinkTime = 0;
+bool ledState = false;
 
-// ── Open a new log file ───────────────────────────────────────
+// ── Non-blocking button state ─────────────────────────────────
+unsigned long buttonPressStart = 0;   // when the button was first pressed
+bool buttonWasPressed = false;        // was button down last loop?
+bool holdFired = false;               // did we already trigger this hold?
+
 bool startLogging() {
-  // Use a timestamp-style name based on millis to avoid overwriting
   char filename[20];
   snprintf(filename, sizeof(filename), "log_%lu.csv", millis());
-
   if (!logFile.open(filename, O_WRONLY | O_CREAT | O_APPEND)) {
     Serial.println("ERROR: Could not open log file");
     return false;
   }
   logFile.println("time_ms,ax,ay,az,gx,gy,gz");
   logFile.sync();
-  Serial.print("Logging started → ");
+  Serial.print("Logging started -> ");
   Serial.println(filename);
   return true;
 }
 
-// ── Close the log file ────────────────────────────────────────
 void stopLogging() {
   logFile.sync();
   logFile.close();
+  digitalWrite(LED_PIN, LOW);
+  ledState = false;
   Serial.println("Logging stopped");
 }
 
@@ -55,11 +51,10 @@ void setup() {
   delay(3000);
   Serial.println("Starting...");
 
-  // ── Button ───────────────────────────────────────────────
   pinMode(BUTTON_PIN, INPUT_PULLUP);
-  Serial.println("Button ready");
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
 
-  // ── MPU-6050 ────────────────────────────────────────────
   Wire.begin();
   Wire.beginTransmission(MPU_ADDR);
   Wire.write(0x6B);
@@ -73,7 +68,6 @@ void setup() {
     Serial.println(mpuResult);
   }
 
-  // ── SD card ─────────────────────────────────────────────
   if (!sd.begin(sdConfig)) {
     Serial.println("SD init failed!");
   } else {
@@ -85,26 +79,41 @@ void setup() {
 }
 
 void loop() {
-  // ── Check for button hold ─────────────────────────────
-  if (buttonHeld()) {
+  bool buttonDown = (digitalRead(BUTTON_PIN) == LOW);
+
+  // ── Button press started ────────────────────────────────────
+  if (buttonDown && !buttonWasPressed) {
+    buttonPressStart = millis();
+    holdFired = false;
+  }
+
+  // ── Button held long enough — trigger once ──────────────────
+  if (buttonDown && !holdFired &&
+      (millis() - buttonPressStart >= HOLD_MS)) {
+    holdFired = true;
     if (!logging) {
-      // Start a new session
       if (sdReady && mpuReady) {
         logging = startLogging();
       } else {
         Serial.println("Cannot log — check MPU and SD");
       }
     } else {
-      // Stop current session
       stopLogging();
       logging = false;
     }
-    // Wait for button release before continuing
-    while (digitalRead(BUTTON_PIN) == LOW) delay(10);
   }
 
-  // ── Log data if session is active ─────────────────────
+  buttonWasPressed = buttonDown;
+
+  // ── Blink LED while logging ─────────────────────────────────
   if (logging) {
+    if (millis() - lastBlinkTime >= 500) {
+      ledState = !ledState;
+      digitalWrite(LED_PIN, ledState);
+      lastBlinkTime = millis();
+    }
+
+    // ── Read and log MPU data ─────────────────────────────────
     Wire.beginTransmission(MPU_ADDR);
     Wire.write(0x3B);
     Wire.endTransmission(false);
@@ -125,7 +134,7 @@ void loop() {
     logFile.println(row);
     logFile.sync();
     Serial.println(row);
-
-    delay(100);  // 10 Hz
   }
+
+  delay(10);  // tight loop — 100Hz when logging
 }
